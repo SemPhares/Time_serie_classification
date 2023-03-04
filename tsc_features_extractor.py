@@ -4,21 +4,323 @@ Class to extract features from a timeserie
 """
 
 __author__ = ["SemPhares"]
-__all__ = ["tsc_features"]
+
+__all__ = ["get_time_series_features",
+            "transform_time_series",
+            "distance_based",
+            "extract_features_from_many_series",
+            "drop_unique_values_columns",
+            "extract_distance_from_many_series",
+            "return_null_columns",
+            "drop_many_columns"
+            ]
 
 
-
+import os
 import random
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from scipy.stats import kurtosis, skew
 from statsmodels.tsa.stattools import acf, pacf
 from kats.tsfeatures.tsfeatures import TsFeatures
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Dict
 
 import warnings
 warnings.simplefilter(action='ignore')
+
+
+"--------------------------- Many Other functions ---------------------------"
+def timer(function_to_time):
+  """
+  a decorator to time the functions
+  """
+  import time
+  from functools  import wraps
+
+  @wraps(function_to_time)
+  def wraper(*args, **kwargs):
+    start = time.time()
+    result = function_to_time(*args, **kwargs)
+    end = time.time()
+    print("\n Runtime : ", round(end-start,3),'secs')
+
+    return result
+  
+  return wraper
+
+
+def drop_many_columns(data:pd.DataFrame,
+                       col_to_drop:List[str]
+                      ) -> pd.DataFrame:
+
+  """
+  Drop a list of columns from a table
+
+  Args:
+      data : 
+      col_to_drop : columns list o drop
+
+  Returns:
+      new data frame
+  """
+  temp = data.copy()
+  return temp.drop(col_to_drop, axis=1)
+
+
+def return_null_columns(
+                        data:pd.DataFrame
+                        ) -> pd.DataFrame:
+
+  """
+  Return the list of columns that contains any (can be modify to all) null or na values from a table
+
+  Args:
+      data : 
+      
+  Returns:
+      list of null columns
+  """  
+  return data.columns[data.isnull().any()].tolist()
+
+
+def drop_unique_values_columns( data:pd.DataFrame,
+                                n_unique: int = 2
+                                ) -> pd.DataFrame:
+  """
+  Drop columns that have only a given number of unique values 
+
+  Args:
+      data : 
+      n_unique : number of unique values to consider
+
+  Returns:
+      new data frame
+  """
+  temp = data.copy()
+  to_drop = []
+  for col in temp.columns:
+    if len(temp[col].unique()) <= n_unique:
+      to_drop.append(col)
+
+  return temp.drop(to_drop,axis=1)
+
+@timer
+def extract_features_from_many_series(
+                            series: Union[List[Union[list,np.array]],
+                                        Dict[str,Union[list,np.array]]],
+                            drop_unique_values:bool = False
+                            ) -> pd.DataFrame:
+
+    """
+    Extract features for many series one shot
+
+    Args:
+        series : list of series to extract data from
+        drop_unique_values : if drop features with only one unique value
+
+    Returns:
+        features dataframe
+    """
+    all_features = pd.DataFrame( dtype= float)
+
+    if isinstance(series,dict):
+
+        for serie in tqdm(list(series.values())):
+            current_feats = get_time_series_features(serie
+                                                        ).get_all_features()
+            all_features = all_features.append(current_feats)
+        
+        all_features['names'] = list(series.keys())
+
+    else:
+        for serie in tqdm(series):
+            current_feats = get_time_series_features(serie
+                                                        ).get_all_features()
+            all_features = all_features.append(current_feats)
+
+    all_features.index = list(range(0,len(series)))
+    
+    return drop_unique_values_columns(all_features) \
+                            if drop_unique_values else all_features
+
+
+def method_exists(obj, 
+                  method:str
+                ) -> bool:
+  """
+  Check if a given method exists in a class
+
+  Args:
+      obj : the class to check in
+      method : the method to check for
+
+  Returns:
+      bool
+  """
+  return callable(getattr(obj, method, None))
+
+
+@timer
+def extract_distance_from_many_series(
+                            series: List[Union[list,np.array]],
+                            distance_methods: List[str]
+                            ) -> pd.DataFrame:
+
+    """
+    Extract distances for many series one shot
+
+    Args:
+        series : list of series to extract data from
+        distance_methods : distance méthods list
+
+    Returns:
+        distance dataframe
+    """
+
+    all_distances = pd.DataFrame(dtype= float)
+    # all_distances = np.zeros((len(series),len(series)))
+    if distance_methods == '_all':
+      pass
+      # too long to compute, need to optimize it
+      # cross_ = []
+      # for i in tqdm(range(len(series))):
+      #     for j in range(i, len(series)):
+      #         if i == j :
+      #             continue
+      #         else: 
+      #           current_distance = distance_based(series[i],
+      #                                             series[j]).get_all_distances()
+                
+      #           all_distances = all_distances.append(current_distance)
+      #           cross_.append(str(i)+'_'+str(j))
+
+      # all_distances.index = list(range(0,len(series)))
+      # all_distances["cross"] = cross_
+    
+    else:
+      for distance in distance_methods:
+        if method_exists(distance_based, distance):
+          temp_dist = pd.DataFrame( index=range(len(series)),
+                                    columns=range(len(series)), 
+                                    dtype= float
+                                    )
+
+          for i in tqdm(range(len(series))):
+            for j in range(i, len(series)):
+                if i == j :
+                    continue
+                else: 
+                  # print(i,j)
+                  distance_object = distance_based(series[i], series[j],
+                                                    alias_1= f'serie_{i}',
+                                                    alias_2=f'serie_{j}'
+                                                    )
+                  distance_function = getattr(distance_object,
+                                              distance)
+
+                  temp_dist[i][j] =  distance_function()
+
+          temp_dist.columns = ['serie_'+str(i) for i in range(len(series))]
+          temp_dist.insert(0,'row', ['serie_'+str(i) for i in range(len(series))])
+          temp_dist.index = [distance]*len(series)
+          
+          all_distances = all_distances.append(temp_dist)
+
+        else:
+          print(distance, "method not found in distance_based class")
+          continue
+
+    return all_distances
+
+"--------------------------- End Others functions ---------------------------"
+
+
+
+class load_data():
+
+    def __init__(self,
+                data_path: str = "_Csv_Data/" ,
+                viz_path: str = "_Vis_Data/",
+                anno_file_path: str = "Annotation/annotation_full_parVideo.xlsx"
+                ) -> None:
+        """
+        Args:
+            data_path: str : path to the dat folder
+            viz_path: str : path to the data visualization
+            anno_file_path:str : full path to the annotation file
+        """
+        self.data_path = data_path
+        self.viz_path = viz_path
+        self.annotations = pd.read_excel(anno_file_path)
+
+
+    def get_serie_from_path(self,
+                            path:str,
+                            ) -> Union[np.ndarray,str]:
+        """
+        Function to extract serie as numpy.array from ArticulationRate data
+
+        Args:
+            path:str : path to the ArticulationRate data
+
+        Return:
+            serie
+        """
+        try:
+            serie = pd.read_csv(path, names =["time",'ArticulationRate'],skiprows=1)
+            serie = serie.ArticulationRate.values
+        except FileNotFoundError as f:
+            print(f)
+            serie = ''
+        return serie
+
+
+    def check_path( self,
+                    path:str,
+                    ) -> str:
+        """
+        Check for the existence of the file
+
+        Args:
+            path:str : path to the existence for
+
+        Return:
+            chekced path
+        """
+        return path if os.path.exists(path) else ''
+
+        
+    def extact_all_series(self) -> pd.DataFrame:
+        """
+        Function to extract serie for all the csv files
+
+        Return:
+            pd.DataFrame object containing the data
+        """
+        data = self.annotations[['sub_video', 'Gender', 'Persuasiveness_rms',
+                        'PerceivedSelf-Confidence_rms', 'AudienceEngagement_rms',
+                        'GlobalEvaluation_rms'
+                        ]].copy()
+        series = []
+        images = []
+        for name in data.sub_video:
+            path = self.data_path+name+"_articulationRate_PolyModel_.csv"
+            series.append(self.get_serie_from_path(path))
+
+            image_path = self.viz_path+name+"ArticulationRate__lengS_15.0_nbS_165__sw_1_poly_deg_30.png"
+            images.append(self.check_path(image_path))
+        
+        data['serie'] = series
+        data['viz'] = images
+
+        return data
+    
+
+    def __call__(self) -> pd.DataFrame:
+        
+        return self.extact_all_series()
 
 
 class get_time_series_features():
@@ -327,12 +629,18 @@ class get_time_series_features():
             Dataframe of 40 features
         """
         
-        t_series = pd.DataFrame(self.ts,columns=['value'])
+        t_series = pd.DataFrame(self.ts, columns=['value'])
         t_series.insert(0,'time', pd.date_range(start_date, periods=self.length, freq="s"))
         t_series.columns = ['time', 'value']
 
         #load the features generation model without time features
-        model = TsFeatures(time=False)
+        selected_features = [
+              'acfpacf_features', 'holt_params', 'hw_params', 'level_shift_features',
+               'nowcasting','seasonalities', 'special_ac', 'statistics', 'stl_features'
+                        ]
+              # , 'trend_detector', 'cusum_detector','outlier_detector',
+              #   'bocp_detector',  'robust_stat_detector', 
+        model = TsFeatures(selected_features = selected_features)
         #extract the features from the timeserie
         output_features = model.transform(t_series)
         output_features = pd.DataFrame(output_features,index=[0])
@@ -342,7 +650,7 @@ class get_time_series_features():
 
     def get_all_features(self) -> pd.DataFrame:
         """
-        Method to retunr all the feature at once
+        Method to return all the feature at once
 
         Retunrs:
             Aggregrate features
@@ -713,7 +1021,7 @@ class distance_based():
 
     def longuest_common_subsequence(self,
                                     epsilon:float = 0.1
-                                    ) -> Tuple[int,float] :
+                                    ) -> float :
 
         """
         Compute the LCSS distance between ts1 and ts2
@@ -740,7 +1048,7 @@ class distance_based():
 
         lcss = int(s[self.length1][self.length2])
         score = lcss/max(self.length1 ,self.length2)   
-        return lcss, score
+        return score
         
 
     def dtw(self) -> float:
@@ -847,3 +1155,35 @@ class distance_based():
         cumulative_diff = np.abs(np.cumsum(s1) - np.cumsum(s2))
         mean_ = np.mean(cumulative_diff)
         return mean_
+
+
+    def get_all_distances(self) -> pd.DataFrame:
+        """
+        Method to return all the computed distance at once
+
+        Retunrs:
+            Aggregrate distance between the two serie
+        """
+
+        distances = [
+                'correlation_distance',
+                'cumulative_differences_distance',
+                'dtw',
+                'edit_distance',
+                'euclidean_distance',
+                'longuest_common_subsequence'
+                ]
+
+        values = np.array(
+                [   self.correlation_distance(),
+                    self.cumulative_differences_distance(),
+                    self.dtw(),
+                    self.edit_distance(),
+                    self.euclidean_distance(),
+                    self.longuest_common_subsequence()
+                ])
+
+        all_distance = pd.DataFrame(values.reshape(1,len(distances)), columns=distances, dtype = float, index=[0])
+
+        return all_distance
+

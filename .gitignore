@@ -1,7 +1,10 @@
 _Csv_Data
+Data/
 test_lstm_classification
 test.ipynb
-ts_classificiation.ipynb
 ts_features.txt
 tsc_tree_based.ipynb
 kats.ipynb
+kats_ts_feats.ipynb
+__pycache__/
+ts_features.py
